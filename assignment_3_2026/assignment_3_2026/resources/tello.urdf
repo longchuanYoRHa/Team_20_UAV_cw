@@ -1,0 +1,164 @@
+<?xml version="1.0"?>
+
+<!-- Body coordinates are: x forward, y left, z up; rotation is: roll right, pitch forward, yaw left -->
+<!-- See http://www.ros.org/reps/rep-0103.html -->
+
+<robot name="tello${suffix}">
+
+
+    <!-- Materials -->
+    <material name="gray">
+        <color rgba="0.5 0.5 0.5 1.0"/>
+    </material>
+    <material name="white">
+        <color rgba="0.9 0.9 0.9 1.0"/>
+    </material>
+    <material name="red">
+        <color rgba="1.0 0 0 1.0"/>
+    </material>
+    <!-- TODO add Gazebo color information -->
+
+    <!-- Base link -->
+    <link name="base_link${suffix}">
+        <visual>
+            <origin xyz="0 0 0" rpy="1.57 0 -1.57"/>
+            <geometry>
+                <mesh filename="tello_v2.stl" scale="0.0015 0.0015 0.0015" />
+            </geometry>
+            <material name="white"/>
+        </visual>
+        <visual>
+            <origin xyz="0 0 0" rpy="1.57 0 -1.57"/>
+            <geometry>
+                <mesh filename="tello_cover.stl" scale="0.0015 0.0015 0.0015" />
+            </geometry>
+            <material name="white"/>
+        </visual>
+        <visual>
+            <origin xyz="0.060 -0.065 0"/>
+            <geometry>
+                <cylinder length="0.025" radius="0.005"/>
+            </geometry>
+            <material name="gray"/>
+        </visual>
+        <visual>
+            <origin xyz="-0.060 0.065 0"/>
+            <geometry>
+                <cylinder length="0.025" radius="0.005"/>
+            </geometry>
+            <material name="gray"/>
+        </visual>
+        <visual>
+            <origin xyz="0.060 0.065 0"/>
+            <geometry>
+                <cylinder length="0.025" radius="0.005"/>
+            </geometry>
+            <material name="gray"/>
+        </visual>
+        <visual>
+            <origin xyz="-0.060 -0.065 0"/>
+            <geometry>
+                <cylinder length="0.025" radius="0.005"/>
+            </geometry>
+            <material name="gray"/>
+        </visual>
+        <inertial>
+            <mass value="0.088"/>
+            <!-- Tensor for solid cuboid 18cm x 18cm x 5cm high -->
+            <inertia ixx="0.00679" ixy="0" ixz="0" iyy="0.00679" iyz="0" izz="0.01313"/>
+        </inertial>
+        <collision name="collision">
+            <geometry>
+                <box size="0.18 0.18 0.05"/>
+            </geometry>
+        </collision>
+    </link>
+
+    <!-- Propeller links -->
+    <link name="propeller1${suffix}">
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="prop.stl" scale="1.0 1.0 1.0" />
+            </geometry>
+            <material name="gray"/>
+        </visual>
+        <inertial>
+            <mass value="0"/>
+            <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+        </inertial>
+    </link>
+    <link name="propeller2${suffix}">
+       <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="prop.stl" scale="1.0 1.0 1.0" />
+            </geometry>
+            <material name="gray"/>
+        </visual>
+        <inertial>
+            <mass value="0"/>
+            <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+        </inertial>
+    </link>
+    <link name="propeller3${suffix}">
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="prop.stl" scale="1.0 1.0 1.0" />
+            </geometry>
+            <material name="gray"/>
+        </visual>
+        <inertial>
+            <mass value="0"/>
+            <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+        </inertial>
+    </link>
+    <link name="propeller4${suffix}">
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="prop.stl" scale="1.0 1.0 1.0" />
+            </geometry>
+            <material name="gray"/>
+        </visual>
+        <inertial>
+            <mass value="0"/>
+            <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
+        </inertial>
+    </link>
+
+    <joint name="propeller1_joint${suffix}" type="continuous">
+        <origin xyz="0.060 -0.065 0.0155" rpy="0 0 0"/>
+        <parent link="base_link${suffix}"/>
+        <child link="propeller1${suffix}"/>
+        <axis xyz="0 0 1"/>
+        <dynamics damping="0.00001" friction="0.00001"/>
+        <limit effort="1000" velocity="100000"/>
+    </joint>
+    <joint name="propeller2_joint${suffix}" type="continuous">
+        <origin xyz="-0.060 0.065 0.0155" rpy="0 0 0"/>
+        <parent link="base_link${suffix}"/>
+        <child link="propeller2${suffix}"/>
+        <axis xyz="0 0 1"/>
+        <dynamics damping="0.00001" friction="0.00001"/>
+        <limit effort="1000" velocity="100000"/>
+    </joint>
+    <joint name="propeller3_joint${suffix}" type="continuous">
+        <origin xyz="0.060 0.065 0.0155" rpy="0 0 0"/>
+        <parent link="base_link${suffix}"/>
+        <child link="propeller3${suffix}"/>
+        <axis xyz="0 0 1"/>
+        <dynamics damping="0.00001" friction="0.00001"/>
+        <limit effort="1000" velocity="100000"/>
+    </joint>
+    <joint name="propeller4_joint${suffix}" type="continuous">
+        <origin xyz="-0.060 -0.065 0.0155" rpy="0 0 0"/>
+        <parent link="base_link${suffix}"/>
+        <child link="propeller4${suffix}"/>
+        <axis xyz="0 0 1"/>
+        <dynamics damping="0.00001" friction="0.00001"/>
+        <limit effort="1000" velocity="100000"/>
+    </joint>
+
+</robot>

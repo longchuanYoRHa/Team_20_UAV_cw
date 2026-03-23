@@ -1,0 +1,5 @@
+target_x, target_y, target_z, target_yaw
+2,2,2,0
+-2,2,2,1.57
+-2,-2,2,3.14
+2,-2,2,4.71
