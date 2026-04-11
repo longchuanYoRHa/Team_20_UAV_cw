@@ -242,6 +242,7 @@ def main():
                 if telemetry is not None:
                     target = sim.targets[sim.current_target]
                     target_error_world = np.array(target[:3]) - np.array(pos)
+                    int_tel = controller.get_integral_telemetry()
                     telemetry.update({
                         "target_distance": float(np.linalg.norm(target_error_world)),
                         "control_cmd": (
@@ -259,6 +260,8 @@ def main():
                             float(current_wind_display[0]),
                             float(current_wind_display[1]),
                         ),
+                        "pid_i_body": int_tel["pid_i_body"],
+                        "yaw_i_term": float(int_tel["yaw_i_term"]),
                     })
 
             rpm = sim.tello_controller.compute_control(
