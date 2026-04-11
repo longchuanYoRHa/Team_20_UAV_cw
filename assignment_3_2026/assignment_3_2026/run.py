@@ -215,9 +215,7 @@ if __name__ == "__main__":
             if sim.wind_enabled:
                 wind_mag = np.linalg.norm(current_wind_display)
 
-            state = np.concatenate(
-                (pos, p.getEulerFromQuaternion(quat), np.asarray(lin_vel_world, dtype=float))
-            )
+            state = np.concatenate((pos, p.getEulerFromQuaternion(quat)))
             controller_output = sim.check_action(
                 controller.controller(
                     state, sim.targets[sim.current_target], pos_control_timestep, sim.wind_enabled

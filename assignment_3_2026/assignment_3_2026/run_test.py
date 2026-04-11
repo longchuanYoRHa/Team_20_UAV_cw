@@ -228,9 +228,7 @@ def main():
             if loop_counter >= steps_between_pos_control:
                 loop_counter = 0
 
-                state = np.concatenate(
-                    (pos, [roll, pitch, yaw], np.asarray(lin_vel_world, dtype=float))
-                )
+                state = np.concatenate((pos, [roll, pitch, yaw]))
                 controller_output = sim.check_action(
                     controller.controller(
                         state, sim.targets[sim.current_target], pos_control_timestep, sim.wind_enabled
