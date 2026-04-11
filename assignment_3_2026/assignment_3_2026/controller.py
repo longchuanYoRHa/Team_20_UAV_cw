@@ -9,9 +9,8 @@ import numpy as np
 # Output:
 #   (vx_cmd, vy_cmd, vz_cmd, yaw_rate_cmd)
 #
-# XY velocity: least-squares fit on horizontal position history.
-# Z velocity: separate central-difference + heavier LPF (altitude is stiffer;
-# fitting z through the same long window as xy often couples noise into vz_cmd).
+# World velocity: finite difference of world-frame position error
+#   e = p_d - p  =>  de/dt ≈ -v  (constant target)  =>  v_hat = -clip((e - e_prev)/dt).
 # ============================================================
 
 
@@ -46,13 +45,7 @@ class DOBController:
 
         self.prev_yaw = None
         self.vel_est_world = np.zeros(3)
-        self.vel_fit_window = 7
-        self._pos_hist_xy = []
-        self.vel_fit_output_alpha = 0.42
-        self.vel_fit_clip = 2.5
-        self.prev_pos_z = None
-        self.prev_prev_pos_z = None
-        self.vel_z_lpf_alpha = 0.10
+        self.prev_pos_error_world = None
 
         self.cmd_xy_lpf_beta = 0.28
         self.vel_cmd_xy_filt = np.zeros(2)
@@ -65,67 +58,19 @@ class DOBController:
     def reset(self):
         self.prev_yaw = None
         self.vel_est_world = np.zeros(3)
-        self._pos_hist_xy = []
-        self.prev_pos_z = None
-        self.prev_prev_pos_z = None
+        self.prev_pos_error_world = None
         self.vel_cmd_xy_filt = np.zeros(2)
         self.vel_cmd_xy_prev_out = np.zeros(2)
         self.d_hat = np.zeros(3)
         self.last_debug = {}
 
-    def _estimate_vel_z(self, z, dt):
-        """Vertical world vz: central difference + stronger LPF (no LS window)."""
-        if self.prev_pos_z is None:
-            self.prev_pos_z = float(z)
-            self.prev_prev_pos_z = None
-            self.vel_est_world[2] = 0.0
-            return
-
-        if self.prev_prev_pos_z is None:
-            raw_z = (z - self.prev_pos_z) / dt
-            self.prev_prev_pos_z = self.prev_pos_z
-        else:
-            raw_z = (z - self.prev_prev_pos_z) / (2.0 * dt)
-            self.prev_prev_pos_z = self.prev_pos_z
-
-        self.prev_pos_z = float(z)
-        a = self.vel_z_lpf_alpha
-        self.vel_est_world[2] = a * raw_z + (1.0 - a) * self.vel_est_world[2]
-
-    def estimate_velocity(self, pos, dt):
-        if dt <= 1e-6:
-            return self.vel_est_world.copy()
-
-        pos = np.asarray(pos, dtype=float).reshape(3)
-        x, y, z = pos[0], pos[1], pos[2]
-
-        self._estimate_vel_z(z, dt)
-
-        self._pos_hist_xy.append(np.array([x, y], dtype=float).copy())
-        if len(self._pos_hist_xy) > self.vel_fit_window:
-            self._pos_hist_xy.pop(0)
-
-        m = len(self._pos_hist_xy)
-        if m < 3:
-            if m == 2:
-                raw_xy = (self._pos_hist_xy[1] - self._pos_hist_xy[0]) / dt
-                raw_xy = np.clip(raw_xy, -self.vel_fit_clip, self.vel_fit_clip)
-                a = self.vel_fit_output_alpha
-                self.vel_est_world[0] = a * raw_xy[0] + (1.0 - a) * self.vel_est_world[0]
-                self.vel_est_world[1] = a * raw_xy[1] + (1.0 - a) * self.vel_est_world[1]
-            return self.vel_est_world.copy()
-
-        Pxy = np.stack(self._pos_hist_xy, axis=0)
-        t = np.arange(m, dtype=np.float64) * dt
-        raw_xy = np.zeros(2, dtype=np.float64)
-        for k in range(2):
-            raw_xy[k] = np.polyfit(t, Pxy[:, k], 1)[0]
-
-        raw_xy = np.clip(raw_xy, -self.vel_fit_clip, self.vel_fit_clip)
-        a = self.vel_fit_output_alpha
-        self.vel_est_world[0] = a * raw_xy[0] + (1.0 - a) * self.vel_est_world[0]
-        self.vel_est_world[1] = a * raw_xy[1] + (1.0 - a) * self.vel_est_world[1]
-        return self.vel_est_world
+    def _update_vel_est_from_pos_error(self, pos_err_world, dt):
+        """Estimate world velocity from successive position errors (cascade-style)."""
+        if dt > 1e-6 and self.prev_pos_error_world is not None:
+            pos_derivative = (pos_err_world - self.prev_pos_error_world) / dt
+            pos_derivative = np.clip(pos_derivative, -3.0, 3.0)
+            self.vel_est_world = -pos_derivative
+        self.prev_pos_error_world = pos_err_world.copy()
 
     def update_dob(self, vel_cmd_body, vel_est_body, dt, wind_enabled):
         if dt <= 1e-6:
@@ -146,8 +91,9 @@ class DOBController:
         pos = np.array([x, y, z], dtype=float)
         pos_d = np.array([x_d, y_d, z_d], dtype=float)
 
-        vel_est_world = self.estimate_velocity(pos, dt)
         pos_err_world = pos_d - pos
+        self._update_vel_est_from_pos_error(pos_err_world, dt)
+        vel_est_world = self.vel_est_world.copy()
 
         R_w2b_yaw = rot_world_to_yaw_body(yaw)
         pos_err_body = R_w2b_yaw @ pos_err_world
