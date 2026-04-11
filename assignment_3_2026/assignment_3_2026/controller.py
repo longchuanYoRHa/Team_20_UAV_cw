@@ -1,16 +1,8 @@
 import numpy as np
 
 # ============================================================
-# Outer-loop controller (strict 6-D state; velocity from 50 Hz position only)
-# Input:
-#   state      = [x, y, z, roll, pitch, yaw]
-#   target_pos = (x_d, y_d, z_d, yaw_d)
-#   dt
-# Output:
-#   (vx_cmd, vy_cmd, vz_cmd, yaw_rate_cmd)
-#
-# World velocity: finite difference of world-frame position error
-#   e = p_d - p  =>  de/dt ≈ -v  (constant target)  =>  v_hat = -clip((e - e_prev)/dt).
+# Outer-loop: yaw-aligned body-frame PID -> velocity setpoint + optional DOB.
+# No command shaping (no xy LPF / slew / brake / hold); only clip to max_vel.
 # ============================================================
 
 
@@ -30,22 +22,27 @@ def rot_world_to_yaw_body(yaw):
 
 class DOBController:
     def __init__(self):
-        # Outer loop: fixed PID (single gain set for easier tuning)
-        self.kp_pos = np.array([0.5, 0.5, 1.18])
-        self.ki_pos = np.array([0.08, 0.08, 0.82])
-        self.kd_vel = np.array([0.125, 0.125, 0.85])
-        self.ki_pos_sat = np.array([0.42, 0.42, 0.55])
+        # 水平轴（yaw 对齐机体系下 x/y）共用同一组外环 PID；z 单独一组。
+        # 细微减超调：略降 P/I，略增 D（仍保留末段收敛能力）
+        kp_xy, kp_z = 0.53, 1.18
+        ki_xy, ki_z = 0.2, 0.85
+        kd_xy, kd_z = 0.30, 0.96
+        ki_sat_xy, ki_sat_z = 0.48, 0.58
+        self.kp_pos = np.array([kp_xy, kp_xy, kp_z])
+        self.ki_pos = np.array([ki_xy, ki_xy, ki_z])
+        self.kd_vel = np.array([kd_xy, kd_xy, kd_z])
+        self.ki_pos_sat = np.array([ki_sat_xy, ki_sat_xy, ki_sat_z])
 
         self.kp_yaw = 2.05
         self.ki_yaw = 0.42
         self.kd_yaw = 0.16
-        self.ki_yaw_sat = 0.18  # max |yaw error integral| (rad·s)
+        self.ki_yaw_sat = 0.18
 
-        self.k_dob = np.array([0, 0, 0])
+        self.k_dob = np.array([0.35, 0.35, 0.25])
         self.dob_leak = np.array([0.15, 0.15, 0.10])
-        self.k_comp = np.array([0, 0, 0])
+        self.k_comp = np.array([0.60, 0.60, 0.50])
 
-        self.max_vel = np.array([1.5, 1.5, 1.5])
+        self.max_vel = np.array([1.08, 1.08, 1.08])
         self.max_yaw_rate = 1.74533
 
         self.prev_yaw = None
@@ -54,19 +51,6 @@ class DOBController:
         self.int_yaw = 0.0
         self.vel_est_world = np.zeros(3)
         self.prev_pos_error_world = None
-
-        self.cmd_xy_lpf_beta = 0.72
-        self.vel_cmd_xy_filt = np.zeros(2)
-        self.vel_cmd_xy_prev_out = np.zeros(2)
-        self.max_xy_slew = 15.0
-        self.max_xy_speed = 1.08
-        self.xy_brake_radius = 0.40
-        self.xy_brake_min_speed = 0.08
-        self.xy_brake_gain = 2.0
-        self.xy_int_bleed_radius = 0.10
-        self.xy_int_reset_radius = 0.04
-        self.xy_hold_pos_norm = 0.006
-        self.xy_hold_vel_norm = 0.028
         self.vel_est_lpf_alpha = 0.56
 
         self.d_hat = np.zeros(3)
@@ -79,13 +63,10 @@ class DOBController:
         self.int_yaw = 0.0
         self.vel_est_world = np.zeros(3)
         self.prev_pos_error_world = None
-        self.vel_cmd_xy_filt = np.zeros(2)
-        self.vel_cmd_xy_prev_out = np.zeros(2)
         self.d_hat = np.zeros(3)
         self.last_debug = {}
 
     def _update_vel_est_from_pos_error(self, pos_err_world, dt):
-        """Estimate world velocity from successive position errors (cascade-style)."""
         if dt > 1e-6 and self.prev_pos_error_world is not None:
             pos_derivative = (pos_err_world - self.prev_pos_error_world) / dt
             pos_derivative = np.clip(pos_derivative, -3.0, 3.0)
@@ -121,27 +102,7 @@ class DOBController:
         pos_err_body = R_w2b_yaw @ pos_err_world
         vel_est_body = R_w2b_yaw @ vel_est_world
 
-        err_xy_n = float(np.linalg.norm(pos_err_body[0:2]))
-        vel_xy_n = float(np.linalg.norm(vel_est_body[0:2]))
-        xy_hold = err_xy_n < self.xy_hold_pos_norm and vel_xy_n < self.xy_hold_vel_norm
-
-        if err_xy_n < self.xy_int_reset_radius:
-            self.int_pos_body[0:2] = 0.0
-        elif err_xy_n < self.xy_int_bleed_radius:
-            # Fast xy integral bleed near target to reduce overshoot,
-            # then fully clear it in the very small final region.
-            bleed_ratio = (err_xy_n - self.xy_int_reset_radius) / max(
-                self.xy_int_bleed_radius - self.xy_int_reset_radius, 1e-6
-            )
-            bleed_factor = 0.55 + 0.35 * bleed_ratio
-            self.int_pos_body[0:2] *= bleed_factor
-        elif xy_hold:
-            self.int_pos_body[0] *= 0.90
-            self.int_pos_body[1] *= 0.90
-        else:
-            self.int_pos_body[0] += pos_err_body[0] * dt
-            self.int_pos_body[1] += pos_err_body[1] * dt
-        self.int_pos_body[2] += pos_err_body[2] * dt
+        self.int_pos_body += pos_err_body * dt
         self.int_pos_body = np.clip(
             self.int_pos_body, -self.ki_pos_sat, self.ki_pos_sat
         )
@@ -159,37 +120,7 @@ class DOBController:
             self.d_hat[:] = 0.0
             vel_cmd = vel_cmd_nominal.copy()
 
-        vel_cmd[2] = float(np.clip(vel_cmd[2], -self.max_vel[2], self.max_vel[2]))
-        xy_cmd_norm = float(np.linalg.norm(vel_cmd[0:2]))
-        if xy_cmd_norm > self.max_xy_speed:
-            vel_cmd[0:2] *= self.max_xy_speed / xy_cmd_norm
-
-        b = self.cmd_xy_lpf_beta
-        vel_cmd[0:2] = b * vel_cmd[0:2] + (1.0 - b) * self.vel_cmd_xy_filt
-        self.vel_cmd_xy_filt = vel_cmd[0:2].copy()
-
-        step = self.max_xy_slew * dt
-        delta_xy = vel_cmd[0:2] - self.vel_cmd_xy_prev_out
-        delta_xy_norm = float(np.linalg.norm(delta_xy))
-        if delta_xy_norm > step and delta_xy_norm > 1e-9:
-            delta_xy *= step / delta_xy_norm
-        vel_cmd[0:2] = self.vel_cmd_xy_prev_out + delta_xy
-        self.vel_cmd_xy_prev_out = vel_cmd[0:2].copy()
-
-        if err_xy_n < self.xy_brake_radius:
-            xy_speed_cap = max(
-                self.xy_brake_min_speed,
-                self.xy_brake_gain * err_xy_n,
-            )
-            xy_cmd_norm = float(np.linalg.norm(vel_cmd[0:2]))
-            if xy_cmd_norm > xy_speed_cap:
-                vel_cmd[0:2] *= xy_speed_cap / xy_cmd_norm
-
-        if xy_hold:
-            vel_cmd[0] = 0.0
-            vel_cmd[1] = 0.0
-            self.vel_cmd_xy_filt[:] = 0.0
-            self.vel_cmd_xy_prev_out[:] = 0.0
+        vel_cmd = np.clip(vel_cmd, -self.max_vel, self.max_vel)
 
         yaw_err = wrap_to_pi(yaw_d - yaw)
         self.int_yaw += yaw_err * dt
@@ -208,7 +139,7 @@ class DOBController:
         yaw_rate_unsat = (
             self.kp_yaw * yaw_err + self.ki_yaw * self.int_yaw + self.kd_yaw * yaw_err_deriv
         )
-        yaw_rate_cmd = np.clip(yaw_rate_unsat, -self.max_yaw_rate, self.max_yaw_rate)
+        yaw_rate_cmd = float(np.clip(yaw_rate_unsat, -self.max_yaw_rate, self.max_yaw_rate))
         if abs(yaw_rate_cmd) >= self.max_yaw_rate - 1e-6:
             self.int_yaw -= yaw_err * dt
 
@@ -258,9 +189,4 @@ def get_integral_telemetry():
 
 
 def controller(state, target_pos, dt, wind_enabled=False):
-    # state format: [position_x (m), position_y (m), position_z (m), roll (radians), pitch (radians), yaw (radians)]
-    # target_pos format: (x (m), y (m), z (m), yaw (radians))
-    # dt: time step (s)
-    # wind_enabled: boolean flag to indicate if wind disturbance should be considered in the control algorithm
-    # return velocity command format: (velocity_x_setpoint (m/s), velocity_y_setpoint (m/s), velocity_z_setpoint (m/s), yaw_rate_setpoint (radians/s))
     return _dob_controller.compute(state, target_pos, dt, wind_enabled)
