@@ -70,10 +70,10 @@ class Simulator:
         self.ax.set_ylim([-1, 1])
         self.ax.set_zlim([-1, 1])
         self.ax.grid(False)
-        self.ax.set_xlabel('X')
-        self.ax.set_ylabel('Y')
-        self.ax.set_zlabel('Z')
-        self.ax.set_title("Wind Speed and Direction")
+        self.ax.set_xlabel(r"X (30·N)")
+        self.ax.set_ylabel(r"Y (30·N)")
+        self.ax.set_zlabel(r"Z (30·N)")
+        self.ax.set_title("Wind force (world); components shown as 30× N for display")
 
         self.quiver = self.ax.quiver(0, 0, 0, 0, 0, 0, length=0, color='b')
 

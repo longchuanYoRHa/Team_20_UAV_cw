@@ -71,6 +71,8 @@ class PlotWidget(FigureCanvas):
         # error
         self.ax1.plot(self.err_buf.get())
         self.ax1.set_title("Distance to Target")
+        self.ax1.set_xlabel("sample @ 50 Hz")
+        self.ax1.set_ylabel("distance (m)")
 
         # control
         self.ax2.plot(self.vx_buf.get(), label="vx_cmd")
@@ -78,6 +80,8 @@ class PlotWidget(FigureCanvas):
         self.ax2.plot(self.vz_buf.get(), label="vz_cmd")
         self.ax2.legend()
         self.ax2.set_title("Control")
+        self.ax2.set_xlabel("sample @ 50 Hz")
+        self.ax2.set_ylabel("velocity setpoint (m/s)")
 
         # velocity
         self.ax3.plot(self.velx_buf.get(), label="vx")
@@ -85,13 +89,16 @@ class PlotWidget(FigureCanvas):
         self.ax3.plot(self.velz_buf.get(), label="vz")
         self.ax3.legend()
         self.ax3.set_title("Actual Velocity")
+        self.ax3.set_xlabel("sample @ 50 Hz")
+        self.ax3.set_ylabel("velocity (m/s)")
 
         # wind (world frame, same as PyBullet WORLD_FRAME force)
         self.ax4.plot(self.wind_wx_buf.get(), label="wind Wx")
         self.ax4.plot(self.wind_wy_buf.get(), label="wind Wy")
         self.ax4.legend()
-        self.ax4.set_title("Wind force (world X/Y, N)")
+        self.ax4.set_title("Wind force (world X/Y)")
         self.ax4.set_xlabel("sample @ 50 Hz")
+        self.ax4.set_ylabel("force (N)")
 
         self.draw()
 
