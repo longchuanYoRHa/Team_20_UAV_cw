@@ -182,7 +182,7 @@ if __name__ == "__main__":
 
     sim = Simulator()
     timestep = 1.0 / 1000  # 1000 Hz
-    pos_control_timestep = 1.0 / 50  # 20 Hz
+    pos_control_timestep = 1.0 / 50  # 50 Hz
     steps_between_pos_control = int(round(pos_control_timestep / timestep))
     loop_counter = 0
 
