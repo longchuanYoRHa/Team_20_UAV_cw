@@ -18,6 +18,91 @@ except Exception as e:
     print(f"[run_test] Telemetry plot unavailable (install PySide6): {e}")
 
 
+def _normalize_angle(angle_rad: float) -> float:
+    return (angle_rad + np.pi) % (2.0 * np.pi) - np.pi
+
+
+class MarkingTestState:
+    """assignment 3 marking test: 10s is the transition period; only sample and statistics in the simulation time [10s, 20s)."""
+
+    RECORD_START_S = 10.0
+    RECORD_END_S = 20.0
+    POS_ERR_MEAN_MAX = 0.01
+    POS_ERR_STD_MAX = 0.01
+    YAW_ERR_MEAN_MAX = 0.01
+    YAW_ERR_STD_MAX = 0.001
+
+    def __init__(self) -> None:
+        self.target: tuple[float, float, float, float] | None = None
+        self.pos_err_norm_samples: list[float] = []
+        self.yaw_err_samples: list[float] = []
+        self.sim_time_s: float = 0.0
+        self.collecting: bool = False
+
+    def reset(self, target: tuple[float, float, float, float] | None) -> None:
+        self.target = tuple(float(x) for x in target) if target is not None else None
+        self.pos_err_norm_samples = []
+        self.yaw_err_samples = []
+        self.sim_time_s = 0.0
+        self.collecting = self.target is not None
+
+    def after_controller_step(self, control_dt: float, pos, yaw: float) -> None:
+        """The simulation time is accumulated according to the controller call beat (consistent with the number of controller calls × control period)."""
+        if not self.collecting or self.target is None:
+            return
+        self.sim_time_s += control_dt
+        if self.RECORD_START_S <= self.sim_time_s < self.RECORD_END_S:
+            t = np.array(self.target[:3], dtype=float)
+            pvec = np.array(pos[:3], dtype=float)
+            pos_err_norm = float(np.linalg.norm(pvec - t))
+            yaw_des = float(self.target[3])
+            yaw_err = _normalize_angle(float(yaw) - yaw_des)
+            self.pos_err_norm_samples.append(pos_err_norm)
+            self.yaw_err_samples.append(yaw_err)
+        if self.sim_time_s + 1e-12 >= self.RECORD_END_S:
+            self._print_result()
+            self.collecting = False
+
+    def _print_result(self) -> None:
+        pe = np.array(self.pos_err_norm_samples, dtype=float)
+        ye = np.array(self.yaw_err_samples, dtype=float)
+        if pe.size == 0:
+            print("[marking_test] No sampling data, skip statistics.")
+            return
+        pos_mean = float(np.mean(pe))
+        pos_std = float(np.std(pe))
+        yaw_mean_abs = float(np.mean(np.abs(ye)))
+        yaw_std = float(np.std(ye))
+        ok_pm = pos_mean < self.POS_ERR_MEAN_MAX
+        ok_ps = pos_std < self.POS_ERR_STD_MAX
+        ok_ym = yaw_mean_abs < self.YAW_ERR_MEAN_MAX
+        ok_ys = yaw_std < self.YAW_ERR_STD_MAX
+        all_ok = ok_pm and ok_ps and ok_ym and ok_ys
+        print("")
+        print(
+            "========== assignment 3 marking test: simulation time window [10s, 20s) (after target switch, excluding the first 10s) =========="
+        )
+        print(f"Target (x,y,z,yaw): {self.target}")
+        print(
+            f"Position error norm mean: {pos_mean:.6f} m  (required < {self.POS_ERR_MEAN_MAX})  {'PASS' if ok_pm else 'FAIL'}"
+        )
+        print(
+            f"Position error norm standard deviation: {pos_std:.6f} m  (required < {self.POS_ERR_STD_MAX})  {'PASS' if ok_ps else 'FAIL'}"
+        )
+        print(
+            f"Yaw error |e| mean: {yaw_mean_abs:.6f} rad  (required < {self.YAW_ERR_MEAN_MAX})  {'PASS' if ok_ym else 'FAIL'}"
+        )
+        print(
+            f"Yaw error standard deviation: {yaw_std:.6f} rad  (required < {self.YAW_ERR_STD_MAX})  {'PASS' if ok_ys else 'FAIL'}"
+        )
+        print(f"Overall in this window: {'PASS' if all_ok else 'FAIL'}")
+        print(
+            "(Note: This is the sampling in the 10s window after target switch; the official scoring will be defined as per the course if there is any other definition.)"
+        )
+        print("================================================================")
+        print("")
+
+
 class Simulator:
     def __init__(self):
         p.connect(p.GUI)
@@ -59,7 +144,13 @@ class Simulator:
         )
         print(f"INFO: Target set to: {self.targets[self.current_target]}")
 
+        self.marking_test = MarkingTestState()
+        self.marking_test.reset(self.targets[self.current_target])
+
         self.init_plot()
+
+    def get_active_target(self):
+        return self.targets[self.current_target]
 
     def init_plot(self):
         plt.ion()
@@ -148,6 +239,7 @@ class Simulator:
             self.start_orientation,
         )
         print(f"INFO: Target set to: {self.targets[self.current_target]}")
+        self.marking_test.reset(self.targets[self.current_target])
 
     def check_action(self, unchecked_action):
         if isinstance(unchecked_action, (tuple, list)):
@@ -189,6 +281,7 @@ class Simulator:
 
 def main():
     sim = Simulator()
+
     telemetry = None
     if TELEMETRY_PLOT_AVAILABLE and TelemetryPlot is not None:
         try:
@@ -200,7 +293,7 @@ def main():
             print(f"[run_test] Failed to start telemetry plot process: {e}")
 
     timestep = 1.0 / 1000  # 1000 Hz
-    pos_control_timestep = 1.0 / 50  # 20 Hz (as in original code)
+    pos_control_timestep = 1.0 / 50  # 50 Hz 外环，与 marking 仿真时钟一致
     steps_between_pos_control = int(round(pos_control_timestep / timestep))
     loop_counter = 0
 
@@ -228,10 +321,12 @@ def main():
             if loop_counter >= steps_between_pos_control:
                 loop_counter = 0
 
+                sim.marking_test.after_controller_step(pos_control_timestep, pos, yaw)
+
                 state = np.concatenate((pos, [roll, pitch, yaw]))
                 controller_output = sim.check_action(
                     controller.controller(
-                        state, sim.targets[sim.current_target], pos_control_timestep, sim.wind_enabled
+                        state, sim.get_active_target(), pos_control_timestep, sim.wind_enabled
                     )
                 )
                 desired_vel = np.array(controller_output[:3], dtype=float)
@@ -240,7 +335,7 @@ def main():
                 sim.update_plot(current_wind_display)
 
                 if telemetry is not None:
-                    target = sim.targets[sim.current_target]
+                    target = sim.get_active_target()
                     target_error_world = np.array(target[:3]) - np.array(pos)
                     int_tel = controller.get_integral_telemetry()
                     telemetry.update({

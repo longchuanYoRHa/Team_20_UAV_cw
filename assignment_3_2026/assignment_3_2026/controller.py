@@ -2,6 +2,7 @@ import numpy as np
 
 # ============================================================
 # Outer-loop: yaw-aligned body-frame PID -> velocity setpoint + optional DOB.
+# First align yaw to target (|yaw_err| less than threshold), then allow horizontal (x,y) velocity commands; z is tracked throughout.
 # No command shaping (no xy LPF / slew / brake / hold); only clip to max_vel.
 # ============================================================
 
@@ -22,11 +23,11 @@ def rot_world_to_yaw_body(yaw):
 
 class DOBController:
     def __init__(self):
-        # 水平轴（yaw 对齐机体系下 x/y）共用同一组外环 PID；z 单独一组。
-        # 细微减超调：略降 P/I，略增 D（仍保留末段收敛能力）
+        # Horizontal axes (x/y in yaw-aligned body frame) share the same outer loop PID; z has its own.
+        # Slight reduction of overshoot: slightly reduce P/I, slightly increase D (still retains final convergence ability)
         kp_xy, kp_z = 0.53, 1.18
-        ki_xy, ki_z = 0.2, 0.85
-        kd_xy, kd_z = 0.30, 0.96
+        ki_xy, ki_z = 0.36 , 0.6
+        kd_xy, kd_z = 0.16, 0.96
         ki_sat_xy, ki_sat_z = 0.48, 0.58
         self.kp_pos = np.array([kp_xy, kp_xy, kp_z])
         self.ki_pos = np.array([ki_xy, ki_xy, ki_z])
@@ -39,11 +40,18 @@ class DOBController:
         self.ki_yaw_sat = 0.18
 
         self.k_dob = np.array([0.35, 0.35, 0.25])
-        self.dob_leak = np.array([0.15, 0.15, 0.10])
+        # d_hat first-order leak [1/s],越大越快忘掉旧扰动估计
+        self.dob_leak = np.array([0.32, 0.32, 0.24])
         self.k_comp = np.array([0.60, 0.60, 0.50])
+
+        # Outer loop position integral exponential decay λ [1/s]: each step int *= exp(-λ*dt), then clip. Increasing λ → integral memory fades faster, reduces overshoot
+        self.int_pos_leak = np.array([2.5, 2.5, 1.5])
+        self.int_yaw_leak = 2.0
 
         self.max_vel = np.array([1.08, 1.08, 1.08])
         self.max_yaw_rate = 1.74533
+        # First turn: only allow horizontal velocity commands in body frame after |yaw_d - yaw| is less than this threshold (rad, about 5°)
+        self.yaw_align_tol = 0.167
 
         self.prev_yaw = None
         self.prev_yaw_err = None
@@ -102,7 +110,15 @@ class DOBController:
         pos_err_body = R_w2b_yaw @ pos_err_world
         vel_est_body = R_w2b_yaw @ vel_est_world
 
-        self.int_pos_body += pos_err_body * dt
+        yaw_err = wrap_to_pi(yaw_d - yaw)
+        yaw_aligned = abs(yaw_err) < self.yaw_align_tol
+
+        # z is always integrated; horizontal is only integrated after yaw alignment to avoid xy integral saturation when turning
+        self.int_pos_body[2] += pos_err_body[2] * dt
+        if yaw_aligned:
+            self.int_pos_body[0] += pos_err_body[0] * dt
+            self.int_pos_body[1] += pos_err_body[1] * dt
+        self.int_pos_body *= np.exp(-self.int_pos_leak * dt)
         self.int_pos_body = np.clip(
             self.int_pos_body, -self.ki_pos_sat, self.ki_pos_sat
         )
@@ -121,9 +137,12 @@ class DOBController:
             vel_cmd = vel_cmd_nominal.copy()
 
         vel_cmd = np.clip(vel_cmd, -self.max_vel, self.max_vel)
+        if not yaw_aligned:
+            vel_cmd[0] = 0.0
+            vel_cmd[1] = 0.0
 
-        yaw_err = wrap_to_pi(yaw_d - yaw)
         self.int_yaw += yaw_err * dt
+        self.int_yaw *= float(np.exp(-self.int_yaw_leak * dt))
         self.int_yaw = float(np.clip(self.int_yaw, -self.ki_yaw_sat, self.ki_yaw_sat))
         if self.prev_yaw_err is None or dt <= 1e-6:
             yaw_err_deriv = 0.0
@@ -159,6 +178,7 @@ class DOBController:
             "d_hat": self.d_hat.copy(),
             "vel_cmd_final": vel_cmd.copy(),
             "yaw_err": yaw_err,
+            "yaw_aligned": yaw_aligned,
             "yaw_rate_cmd": yaw_rate_cmd,
             "int_pos_body": self.int_pos_body.copy(),
             "int_yaw": self.int_yaw,
