@@ -338,6 +338,8 @@ def main():
                     target = sim.get_active_target()
                     target_error_world = np.array(target[:3]) - np.array(pos)
                     int_tel = controller.get_integral_telemetry()
+                    dob_comp_body = np.array(int_tel["dob_comp_body"], dtype=float)
+                    dob_comp_world = controller.rot_world_to_yaw_body(yaw).T @ dob_comp_body
                     telemetry.update({
                         "target_distance": float(np.linalg.norm(target_error_world)),
                         "control_cmd": (
@@ -354,6 +356,10 @@ def main():
                         "wind_xy": (
                             float(current_wind_display[0]),
                             float(current_wind_display[1]),
+                        ),
+                        "dob_comp_xy": (
+                            float(dob_comp_world[0]),
+                            float(dob_comp_world[1]),
                         ),
                         "pid_i_body": int_tel["pid_i_body"],
                         "yaw_i_term": float(int_tel["yaw_i_term"]),

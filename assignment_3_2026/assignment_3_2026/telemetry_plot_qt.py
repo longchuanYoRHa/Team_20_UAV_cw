@@ -22,15 +22,14 @@ class RollingBuffer:
 
 class PlotWidget(FigureCanvas):
     def __init__(self):
-        self.fig = Figure(figsize=(6, 11))
+        self.fig = Figure(figsize=(6, 9))
         super().__init__(self.fig)
 
-        self.ax1 = self.fig.add_subplot(5, 1, 1)
-        self.ax2 = self.fig.add_subplot(5, 1, 2)
-        self.ax3 = self.fig.add_subplot(5, 1, 3)
-        self.ax4 = self.fig.add_subplot(5, 1, 4)
-        self.ax5 = self.fig.add_subplot(5, 1, 5)
-        self.ax5_twin = self.ax5.twinx()
+        self.ax1 = self.fig.add_subplot(4, 1, 1)
+        self.ax2 = self.fig.add_subplot(4, 1, 2)
+        self.ax3 = self.fig.add_subplot(4, 1, 3)
+        self.ax4 = self.fig.add_subplot(4, 1, 4)
+        self.ax4_twin = self.ax4.twinx()
 
         self.fig.tight_layout()
 
@@ -46,11 +45,8 @@ class PlotWidget(FigureCanvas):
 
         self.wind_wx_buf = RollingBuffer()
         self.wind_wy_buf = RollingBuffer()
-
-        self.pid_ix_buf = RollingBuffer()
-        self.pid_iy_buf = RollingBuffer()
-        self.pid_iz_buf = RollingBuffer()
-        self.yaw_i_term_buf = RollingBuffer()
+        self.dob_wx_buf = RollingBuffer()
+        self.dob_wy_buf = RollingBuffer()
 
     def update_data(self, packet):
         self.err_buf.append(packet["target_distance"])
@@ -68,20 +64,16 @@ class PlotWidget(FigureCanvas):
         wx, wy = packet.get("wind_xy", (0.0, 0.0))
         self.wind_wx_buf.append(wx)
         self.wind_wy_buf.append(wy)
-
-        ix, iy, iz = packet.get("pid_i_body", (0.0, 0.0, 0.0))
-        self.pid_ix_buf.append(ix)
-        self.pid_iy_buf.append(iy)
-        self.pid_iz_buf.append(iz)
-        self.yaw_i_term_buf.append(float(packet.get("yaw_i_term", 0.0)))
+        dob_wx, dob_wy = packet.get("dob_comp_xy", (0.0, 0.0))
+        self.dob_wx_buf.append(dob_wx)
+        self.dob_wy_buf.append(dob_wy)
 
     def redraw(self):
         self.ax1.clear()
         self.ax2.clear()
         self.ax3.clear()
         self.ax4.clear()
-        self.ax5.clear()
-        self.ax5_twin.clear()
+        self.ax4_twin.clear()
 
         # error
         self.ax1.plot(self.err_buf.get())
@@ -108,25 +100,15 @@ class PlotWidget(FigureCanvas):
         self.ax3.set_ylabel("velocity (m/s)")
 
         # wind (world frame, same as PyBullet WORLD_FRAME force)
-        self.ax4.plot(self.wind_wx_buf.get(), label="wind Wx")
-        self.ax4.plot(self.wind_wy_buf.get(), label="wind Wy")
-        self.ax4.legend()
-        self.ax4.set_title("Wind force (world X/Y)")
+        (w1,) = self.ax4.plot(self.wind_wx_buf.get(), label="wind Wx", color="C0")
+        (w2,) = self.ax4.plot(self.wind_wy_buf.get(), label="wind Wy", color="C1")
+        (d1,) = self.ax4_twin.plot(self.dob_wx_buf.get(), linestyle="--", label="dob comp Wx", color="C2")
+        (d2,) = self.ax4_twin.plot(self.dob_wy_buf.get(), linestyle="--", label="dob comp Wy", color="C3")
+        self.ax4.set_title("Wind force vs DOB compensation (world X/Y)")
         self.ax4.set_xlabel("sample @ 50 Hz")
-        self.ax4.set_ylabel("force (N)")
-
-        # outer-loop PID integral → velocity / yaw-rate command (same step as vx_cmd plot)
-        (l1,) = self.ax5.plot(self.pid_ix_buf.get(), color="C0", label="I→vx (body)")
-        (l2,) = self.ax5.plot(self.pid_iy_buf.get(), color="C1", label="I→vy (body)")
-        (l3,) = self.ax5.plot(self.pid_iz_buf.get(), color="C2", label="I→vz (body)")
-        (l4,) = self.ax5_twin.plot(
-            self.yaw_i_term_buf.get(), color="C3", linestyle="--", label="I→yaw rate"
-        )
-        self.ax5.set_title("PID integral contribution (overshoot diagnostic)")
-        self.ax5.set_xlabel("sample @ 50 Hz")
-        self.ax5.set_ylabel("position loop I term (m/s)")
-        self.ax5_twin.set_ylabel("yaw loop I term (rad/s)")
-        self.ax5.legend(handles=[l1, l2, l3, l4], loc="upper left", fontsize=8)
+        self.ax4.set_ylabel("wind force (N)")
+        self.ax4_twin.set_ylabel("dob compensation (m/s)")
+        self.ax4.legend(handles=[w1, w2, d1, d2], loc="upper left", fontsize=8)
 
         self.draw()
 

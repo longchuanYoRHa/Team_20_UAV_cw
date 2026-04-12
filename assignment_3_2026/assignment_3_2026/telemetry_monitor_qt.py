@@ -20,6 +20,8 @@ class TelemetryPacket:
     position: tuple[float, float, float]
     yaw: float
     wind_enabled: bool
+    wind_xy: Optional[tuple[float, float]] = None
+    dob_comp_xy: Optional[tuple[float, float]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -32,6 +34,8 @@ class TelemetryPacket:
             "position": self.position,
             "yaw": self.yaw,
             "wind_enabled": self.wind_enabled,
+            "wind_xy": self.wind_xy,
+            "dob_comp_xy": self.dob_comp_xy,
         }
 
 
@@ -136,7 +140,7 @@ def _gui_process_main(shared_queue: mp.Queue, title: str) -> None:
         def __init__(self, window_title: str) -> None:
             super().__init__()
             self.setWindowTitle(window_title)
-            self.resize(460, 280)
+            self.resize(520, 320)
 
             root = QtWidgets.QVBoxLayout(self)
 
@@ -162,6 +166,8 @@ def _gui_process_main(shared_queue: mp.Queue, title: str) -> None:
                 ("控制量 vx vy vz yaw_rate", "control_cmd"),
                 ("实际速度 vx vy vz", "actual_vel_body"),
                 ("实际角速度 wx wy wz", "actual_ang_vel_body"),
+                ("风扰动 Wx Wy", "wind_xy"),
+                ("DOB补偿 Wx Wy", "dob_comp_xy"),
                 ("当前偏航 yaw", "yaw"),
             ]
 
@@ -189,6 +195,8 @@ def _gui_process_main(shared_queue: mp.Queue, title: str) -> None:
             self.labels["control_cmd"].setText(_fmt_vec(data.get("control_cmd"), 4, suffixes=("m/s", "m/s", "m/s", "rad/s")))
             self.labels["actual_vel_body"].setText(_fmt_vec(data.get("actual_vel_body"), 3, suffixes=("m/s", "m/s", "m/s")))
             self.labels["actual_ang_vel_body"].setText(_fmt_vec(data.get("actual_ang_vel_body"), 3, suffixes=("rad/s", "rad/s", "rad/s")))
+            self.labels["wind_xy"].setText(_fmt_vec(data.get("wind_xy"), 2, suffixes=("N", "N")))
+            self.labels["dob_comp_xy"].setText(_fmt_vec(data.get("dob_comp_xy"), 2, suffixes=("m/s", "m/s")))
             yaw = data.get("yaw")
             self.labels["yaw"].setText(f"{yaw:.3f} rad" if yaw is not None else "-")
 

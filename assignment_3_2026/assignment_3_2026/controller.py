@@ -27,8 +27,8 @@ class DOBController:
         # Slight reduction of overshoot: slightly reduce P/I, slightly increase D (still retains final convergence ability)
         kp_xy, kp_z = 0.53, 1.18
         ki_xy, ki_z = 0.36 , 0.6
-        kd_xy, kd_z = 0.16, 0.96
-        ki_sat_xy, ki_sat_z = 0.48, 0.58
+        kd_xy, kd_z = 0.24, 0.96
+        ki_sat_xy, ki_sat_z = 0.30, 0.58
         self.kp_pos = np.array([kp_xy, kp_xy, kp_z])
         self.ki_pos = np.array([ki_xy, ki_xy, ki_z])
         self.kd_vel = np.array([kd_xy, kd_xy, kd_z])
@@ -39,10 +39,9 @@ class DOBController:
         self.kd_yaw = 0.16
         self.ki_yaw_sat = 0.18
 
-        self.k_dob = np.array([0.35, 0.35, 0.25])
-        # d_hat first-order leak [1/s],越大越快忘掉旧扰动估计
-        self.dob_leak = np.array([0.32, 0.32, 0.24])
-        self.k_comp = np.array([0.60, 0.60, 0.50])
+        self.k_dob = np.array([0.10, 0.10, 0.00])
+        self.dob_leak = np.array([0.55, 0.55, 0.40])
+        self.k_comp = np.array([0.16, 0.16, 0.00])
 
         # Outer loop position integral exponential decay λ [1/s]: each step int *= exp(-λ*dt), then clip. Increasing λ → integral memory fades faster, reduces overshoot
         self.int_pos_leak = np.array([2.5, 2.5, 1.5])
@@ -128,10 +127,17 @@ class DOBController:
         d_term = -self.kd_vel * vel_est_body
         vel_cmd_nominal = p_term + i_term + d_term
 
+        dob_comp = np.zeros(3)
         if wind_enabled:
-            if np.linalg.norm(pos_err_body[0:2]) > 0.8:
+            xy_err = np.linalg.norm(pos_err_body[0:2])
+
+            if xy_err <= 0.25:
                 self.update_dob(vel_cmd_nominal, vel_est_body, dt, wind_enabled)
-            vel_cmd = vel_cmd_nominal + self.k_comp * self.d_hat
+            else:
+                self.d_hat *= np.exp(-self.dob_leak * dt)
+
+            dob_comp = self.k_comp * self.d_hat
+            vel_cmd = vel_cmd_nominal + dob_comp
         else:
             self.d_hat[:] = 0.0
             vel_cmd = vel_cmd_nominal.copy()
@@ -176,6 +182,7 @@ class DOBController:
             "pid_i_body": i_term.copy(),
             "pid_d_body": d_term.copy(),
             "d_hat": self.d_hat.copy(),
+            "dob_comp_body": dob_comp.copy(),
             "vel_cmd_final": vel_cmd.copy(),
             "yaw_err": yaw_err,
             "yaw_aligned": yaw_aligned,
@@ -200,11 +207,21 @@ def get_integral_telemetry():
     """Integral contributions from the last controller() call (for plotting)."""
     d = _dob_controller.last_debug
     if not d:
-        return {"pid_i_body": (0.0, 0.0, 0.0), "yaw_i_term": 0.0}
+        return {
+            "pid_i_body": (0.0, 0.0, 0.0),
+            "yaw_i_term": 0.0,
+            "dob_comp_body": (0.0, 0.0, 0.0),
+        }
     pi = np.asarray(d["pid_i_body"], dtype=float).ravel()
+    dob_comp = np.asarray(d.get("dob_comp_body", (0.0, 0.0, 0.0)), dtype=float).ravel()
     return {
         "pid_i_body": (float(pi[0]), float(pi[1]), float(pi[2])),
         "yaw_i_term": float(d["yaw_i_term"]),
+        "dob_comp_body": (
+            float(dob_comp[0]),
+            float(dob_comp[1]),
+            float(dob_comp[2]),
+        ),
     }
 
 
