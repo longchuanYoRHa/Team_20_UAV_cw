@@ -22,7 +22,7 @@ class Simulator:
         self.drone_id = p.loadURDF(
             "resources/tello.urdf", self.start_pos, self.start_orientation
         )
-        self.wind_enabled = True # wind enabled by default
+        self.wind_enabled = False # wind enabled by default
         self.wind_sim = Wind(max_steady_state=0.02, max_gust=0.02,k_gusts=0.1)
 
         self.M = 0.088
@@ -182,7 +182,7 @@ if __name__ == "__main__":
 
     sim = Simulator()
     timestep = 1.0 / 1000  # 1000 Hz
-    pos_control_timestep = 1.0 / 50  # 20 Hz
+    pos_control_timestep = 1.0 / 50  # 50 Hz
     steps_between_pos_control = int(round(pos_control_timestep / timestep))
     loop_counter = 0
 
