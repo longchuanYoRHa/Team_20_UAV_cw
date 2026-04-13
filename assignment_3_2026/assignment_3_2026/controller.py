@@ -25,10 +25,10 @@ class DOBController:
     def __init__(self):
         # Horizontal axes (x/y in yaw-aligned body frame) share the same outer loop PID; z has its own.
         # Slight reduction of overshoot: slightly reduce P/I, slightly increase D (still retains final convergence ability)
-        kp_xy, kp_z = 0.53, 1.18
-        ki_xy, ki_z = 0.36 , 0.6
-        kd_xy, kd_z = 0.24, 0.96
-        ki_sat_xy, ki_sat_z = 0.30, 0.58
+        kp_xy, kp_z = 0.672, 1.18
+        ki_xy, ki_z = 0.095 , 0.6
+        kd_xy, kd_z = 0.464, 0.96
+        ki_sat_xy, ki_sat_z = 0.60, 0.58
         self.kp_pos = np.array([kp_xy, kp_xy, kp_z])
         self.ki_pos = np.array([ki_xy, ki_xy, ki_z])
         self.kd_vel = np.array([kd_xy, kd_xy, kd_z])
@@ -62,6 +62,10 @@ class DOBController:
 
         self.d_hat = np.zeros(3)
         self.last_debug = {}
+
+        # Tuning mode: XY uses P-term only (disable XY I/D/DOB).
+        # Z and yaw behavior remain unchanged.
+        self.xy_p_only = False
 
     def reset(self):
         self.prev_yaw = None
@@ -114,7 +118,7 @@ class DOBController:
 
         # z is always integrated; horizontal is only integrated after yaw alignment to avoid xy integral saturation when turning
         self.int_pos_body[2] += pos_err_body[2] * dt
-        if yaw_aligned:
+        if yaw_aligned and (not self.xy_p_only):
             self.int_pos_body[0] += pos_err_body[0] * dt
             self.int_pos_body[1] += pos_err_body[1] * dt
         self.int_pos_body *= np.exp(-self.int_pos_leak * dt)
@@ -125,10 +129,17 @@ class DOBController:
         p_term = self.kp_pos * pos_err_body
         i_term = self.ki_pos * self.int_pos_body
         d_term = -self.kd_vel * vel_est_body
+
+        if self.xy_p_only:
+            # Force XY to be strictly P-only regardless of configured gains/states.
+            self.int_pos_body[0:2] = 0.0
+            i_term[0:2] = 0.0
+            d_term[0:2] = 0.0
+
         vel_cmd_nominal = p_term + i_term + d_term
 
         dob_comp = np.zeros(3)
-        if wind_enabled:
+        if wind_enabled and (not self.xy_p_only):
             xy_err = np.linalg.norm(pos_err_body[0:2])
 
             if xy_err <= 0.25:
@@ -138,6 +149,7 @@ class DOBController:
 
             dob_comp = self.k_comp * self.d_hat
             vel_cmd = vel_cmd_nominal + dob_comp
+            # vel_cmd = vel_cmd_nominal.copy()
         else:
             self.d_hat[:] = 0.0
             vel_cmd = vel_cmd_nominal.copy()
@@ -211,9 +223,11 @@ def get_integral_telemetry():
             "pid_i_body": (0.0, 0.0, 0.0),
             "yaw_i_term": 0.0,
             "dob_comp_body": (0.0, 0.0, 0.0),
+            "vel_est_body": (0.0, 0.0, 0.0),
         }
     pi = np.asarray(d["pid_i_body"], dtype=float).ravel()
     dob_comp = np.asarray(d.get("dob_comp_body", (0.0, 0.0, 0.0)), dtype=float).ravel()
+    vel_est = np.asarray(d.get("vel_est_body", (0.0, 0.0, 0.0)), dtype=float).ravel()
     return {
         "pid_i_body": (float(pi[0]), float(pi[1]), float(pi[2])),
         "yaw_i_term": float(d["yaw_i_term"]),
@@ -222,8 +236,14 @@ def get_integral_telemetry():
             float(dob_comp[1]),
             float(dob_comp[2]),
         ),
+        "vel_est_body": (
+            float(vel_est[0]),
+            float(vel_est[1]),
+            float(vel_est[2]),
+        ),
     }
 
 
 def controller(state, target_pos, dt, wind_enabled=False):
+    dt = 0.0833
     return _dob_controller.compute(state, target_pos, dt, wind_enabled)

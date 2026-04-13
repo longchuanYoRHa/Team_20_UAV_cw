@@ -353,6 +353,7 @@ def main():
                             float(lin_vel[1]),
                             float(lin_vel[2]),
                         ),
+                        "vel_est_body": int_tel.get("vel_est_body", (0.0, 0.0, 0.0)),
                         "wind_xy": (
                             float(current_wind_display[0]),
                             float(current_wind_display[1]),

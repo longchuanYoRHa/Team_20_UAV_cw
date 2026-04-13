@@ -2,7 +2,7 @@ import sys
 import multiprocessing as mp
 from collections import deque
 
-from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout
+from PySide6.QtWidgets import QApplication, QFrame, QGridLayout, QLabel, QWidget, QVBoxLayout
 from PySide6.QtCore import QTimer
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -42,6 +42,9 @@ class PlotWidget(FigureCanvas):
         self.velx_buf = RollingBuffer()
         self.vely_buf = RollingBuffer()
         self.velz_buf = RollingBuffer()
+        self.velx_est_buf = RollingBuffer()
+        self.vely_est_buf = RollingBuffer()
+        self.velz_est_buf = RollingBuffer()
 
         self.wind_wx_buf = RollingBuffer()
         self.wind_wy_buf = RollingBuffer()
@@ -60,6 +63,10 @@ class PlotWidget(FigureCanvas):
         self.velx_buf.append(ax)
         self.vely_buf.append(ay)
         self.velz_buf.append(az)
+        ex, ey, ez = packet.get("vel_est_body", (0.0, 0.0, 0.0))
+        self.velx_est_buf.append(ex)
+        self.vely_est_buf.append(ey)
+        self.velz_est_buf.append(ez)
 
         wx, wy = packet.get("wind_xy", (0.0, 0.0))
         self.wind_wx_buf.append(wx)
@@ -91,11 +98,14 @@ class PlotWidget(FigureCanvas):
         self.ax2.set_ylabel("velocity setpoint (m/s)")
 
         # velocity
-        self.ax3.plot(self.velx_buf.get(), label="vx")
-        self.ax3.plot(self.vely_buf.get(), label="vy")
-        self.ax3.plot(self.velz_buf.get(), label="vz")
+        self.ax3.plot(self.velx_buf.get(), label="vx actual", color="C0")
+        self.ax3.plot(self.vely_buf.get(), label="vy actual", color="C1")
+        self.ax3.plot(self.velz_buf.get(), label="vz actual", color="C2")
+        self.ax3.plot(self.velx_est_buf.get(), label="vx est", color="C0", linestyle="--")
+        self.ax3.plot(self.vely_est_buf.get(), label="vy est", color="C1", linestyle="--")
+        self.ax3.plot(self.velz_est_buf.get(), label="vz est", color="C2", linestyle="--")
         self.ax3.legend()
-        self.ax3.set_title("Actual Velocity")
+        self.ax3.set_title("Actual vs Estimated Velocity")
         self.ax3.set_xlabel("sample @ 50 Hz")
         self.ax3.set_ylabel("velocity (m/s)")
 
@@ -119,11 +129,27 @@ class TelemetryWindow(QWidget):
         self.queue = queue
 
         self.setWindowTitle("Telemetry Plot")
-        self.resize(800, 800)
+        self.resize(820, 900)
 
         layout = QVBoxLayout()
         self.plot = PlotWidget()
         layout.addWidget(self.plot)
+
+        self.vx_panel = QFrame()
+        self.vx_panel.setFrameShape(QFrame.Box)
+        self.vx_panel.setLineWidth(1)
+        vx_layout = QGridLayout(self.vx_panel)
+        vx_layout.addWidget(QLabel("X轴速度实时值"), 0, 0, 1, 2)
+        vx_layout.addWidget(QLabel("实际速度 vx"), 1, 0)
+        vx_layout.addWidget(QLabel("估计速度 vx"), 2, 0)
+        self.vx_actual_label = QLabel("-")
+        self.vx_est_label = QLabel("-")
+        self.vx_actual_label.setTextInteractionFlags(self.vx_actual_label.textInteractionFlags())
+        self.vx_est_label.setTextInteractionFlags(self.vx_est_label.textInteractionFlags())
+        vx_layout.addWidget(self.vx_actual_label, 1, 1)
+        vx_layout.addWidget(self.vx_est_label, 2, 1)
+        layout.addWidget(self.vx_panel)
+
         self.setLayout(layout)
 
         self.timer = QTimer()
@@ -134,6 +160,10 @@ class TelemetryWindow(QWidget):
         while not self.queue.empty():
             packet = self.queue.get()
             self.plot.update_data(packet)
+            actual_vel = packet.get("actual_vel", (0.0, 0.0, 0.0))
+            vel_est = packet.get("vel_est_body", (0.0, 0.0, 0.0))
+            self.vx_actual_label.setText(f"{float(actual_vel[0]):+.3f} m/s")
+            self.vx_est_label.setText(f"{float(vel_est[0]):+.3f} m/s")
 
         self.plot.redraw()
 
