@@ -27,7 +27,7 @@ class DOBController:
         # Slight reduction of overshoot: slightly reduce P/I, slightly increase D (still retains final convergence ability)
         kp_xy, kp_z = 0.672, 1.18
         ki_xy, ki_z = 0.095 , 0.6
-        kd_xy, kd_z = 0.464, 0.96
+        kd_xy, kd_z = 0.504, 0.96
         ki_sat_xy, ki_sat_z = 0.60, 0.58
         self.kp_pos = np.array([kp_xy, kp_xy, kp_z])
         self.ki_pos = np.array([ki_xy, ki_xy, ki_z])
