@@ -1,0 +1,104 @@
+{
+  "dt_phys_s": 0.004166666666666667,
+  "ctrl_dt_s": 0.001,
+  "match_run_py_timing": true,
+  "duration_s": 6.5,
+  "settle_before_step_s": 0.5,
+  "notes": "Identified transfer functions from cmd -> measured body-frame velocity / yaw-rate. Use these when designing the outer (position) loop and disturbance observer. If `match_run_py_timing` is true, the inner loop reflects the dt mismatch in run.py (motor_model advances by 1/1000 per pybullet tick of 1/240 \u2192 motors \u22484x slower than spec in simulation time).",
+  "axes": {
+    "vx": {
+      "preferred_model": "second_order_zero",
+      "params_mean_over_amps": {
+        "K": 0.9791332892264056,
+        "wn": 1.1688119784531361,
+        "zeta": 0.42594658984568196,
+        "tau_z": 0.2052931630745509,
+        "L": 0.1153442442895058,
+        "rmse_mean": 0.0007455525634085363,
+        "rmse_max": 0.0008901533522783099
+      },
+      "derived": {
+        "wd": 1.0574806610188887,
+        "peak_time_s": 2.9708275237514514,
+        "overshoot_pct": 22.7858406102966,
+        "settling_time_2pct_s": 8.0345247321176,
+        "bandwidth_3dB_rad_s": 1.5780541649025217,
+        "bandwidth_3dB_hz": 0.2511551208109893
+      },
+      "amps_tested": [
+        0.3,
+        -0.3,
+        0.15
+      ]
+    },
+    "vy": {
+      "preferred_model": "second_order_zero",
+      "params_mean_over_amps": {
+        "K": 0.9791332892264056,
+        "wn": 1.1688119784531361,
+        "zeta": 0.42594658984568196,
+        "tau_z": 0.2052931630745509,
+        "L": 0.1153442442895058,
+        "rmse_mean": 0.0007455525634085363,
+        "rmse_max": 0.0008901533522783099
+      },
+      "derived": {
+        "wd": 1.0574806610188887,
+        "peak_time_s": 2.9708275237514514,
+        "overshoot_pct": 22.7858406102966,
+        "settling_time_2pct_s": 8.0345247321176,
+        "bandwidth_3dB_rad_s": 1.5780541649025217,
+        "bandwidth_3dB_hz": 0.2511551208109893
+      },
+      "amps_tested": [
+        0.3,
+        -0.3,
+        0.15
+      ]
+    },
+    "vz": {
+      "preferred_model": "first_order",
+      "params_mean_over_amps": {
+        "K": 0.9564045415827129,
+        "tau": 0.1659312509862405,
+        "L": 0.05598021989635007,
+        "rmse_mean": 0.010666670491251083,
+        "rmse_max": 0.011242678052240197
+      },
+      "derived": {
+        "bandwidth_3dB_rad_s": 6.026592302874417,
+        "bandwidth_3dB_hz": 0.9591619550020322,
+        "settling_time_2pct_s": 0.663725003944962
+      },
+      "amps_tested": [
+        0.2,
+        -0.2,
+        0.1
+      ]
+    },
+    "yaw_rate": {
+      "preferred_model": "second_order",
+      "params_mean_over_amps": {
+        "K": 1.0018688634605593,
+        "wn": 40.05278984476113,
+        "zeta": 0.1799212498074827,
+        "L": 0.00014540324314614805,
+        "rmse_mean": 0.0034117797507788347,
+        "rmse_max": 0.004335992529559445
+      },
+      "derived": {
+        "wd": 39.39916906165033,
+        "peak_time_s": 0.07973753580117254,
+        "overshoot_pct": 56.29207456658675,
+        "settling_time_2pct_s": 0.5550661716633123,
+        "bandwidth_3dB_rad_s": 60.80186826875665,
+        "bandwidth_3dB_hz": 9.676917884194882
+      },
+      "amps_tested": [
+        0.6,
+        -0.6,
+        0.3
+      ]
+    }
+  }
+}
