@@ -47,7 +47,7 @@ class DOBController:
         self.int_pos_leak = np.array([2.5, 2.5, 1.5])
         self.int_yaw_leak = 2.0
 
-        self.max_vel = np.array([1.08, 1.08, 1.08])
+        self.max_vel = np.array([0.68, 0.68, 0.68])
         self.max_yaw_rate = 1.74533
         # First turn: only allow horizontal velocity commands in body frame after |yaw_d - yaw| is less than this threshold (rad, about 5°)
         self.yaw_align_tol = 0.167
