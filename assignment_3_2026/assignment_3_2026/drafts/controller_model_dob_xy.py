@@ -192,7 +192,7 @@ class ModelDOBxyController:
         kp_xy = 0.38
         ki_xy = 0.040
         kd_xy = 0.30
-        ki_sat_xy = 0.40
+        ki_sat_xy = 0.20
 
         # ---------------- Z 外环增益 (直接抄 controller.py) ----------------
         kp_z = 1.18
@@ -221,8 +221,8 @@ class ModelDOBxyController:
         self.int_pos_leak = np.array([1.8, 1.8, 1.5], dtype=float)
 
         # ---------------- 命令限幅 ----------------
-        self.max_vel = np.array([0.78, 0.78, 0.78], dtype=float)
-        self.max_xy_speed = 0.78  # 与 controller.py 同
+        self.max_vel = np.array([0.68, 0.68, 0.68], dtype=float)
+        self.max_xy_speed = 0.68  # 与 controller.py 同
 
         # ---------------- 速度估计 (与 controller.py 完全一致) ----------------
         self.vel_est_world = np.zeros(3, dtype=float)
