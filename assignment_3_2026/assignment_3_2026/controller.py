@@ -344,11 +344,12 @@ class ModelDOBxyController:
         yaw_aligned = abs(yaw_err) < self.yaw_align_tol
 
         # -------- 1) 积分 (与 controller.py 同策略) --------
-        # Z 一直积；XY 仅在 yaw 对齐后积
+        # Z 一直积；XY 不再等待 yaw 对齐（边转向边飞）。
+        # 但为避免大 yaw 误差时积分 windup，XY 积分随 yaw 误差平滑衰减。
         self.int_pos_body[2] += pos_err_body[2] * dt
-        if yaw_aligned:
-            self.int_pos_body[0] += pos_err_body[0] * dt
-            self.int_pos_body[1] += pos_err_body[1] * dt
+        yaw_i_scale = 1.0 - smoothstep(abs(yaw_err), self.yaw_align_tol, 3.0 * self.yaw_align_tol)
+        self.int_pos_body[0] += yaw_i_scale * pos_err_body[0] * dt
+        self.int_pos_body[1] += yaw_i_scale * pos_err_body[1] * dt
         self.int_pos_body *= np.exp(-self.int_pos_leak * dt)
         self.int_pos_body = np.clip(self.int_pos_body, -self.ki_pos_sat, self.ki_pos_sat)
 
@@ -398,10 +399,7 @@ class ModelDOBxyController:
         # -------- 5) 合成最终命令 --------
         vel_cmd = vel_cmd_nominal + dob_comp
 
-        # yaw 未对齐: 禁止水平移动 (同 controller.py)
-        if not yaw_aligned:
-            vel_cmd[0] = 0.0
-            vel_cmd[1] = 0.0
+        # yaw 未对齐时不再禁止水平移动：允许边转向边飞向目标。
 
         # XY 轻度 LPF: 平滑但不过度滞后；不对 Z 做 LPF (Z 内环快, 没必要)
         xy_cmd = vel_cmd[0:2].copy()
