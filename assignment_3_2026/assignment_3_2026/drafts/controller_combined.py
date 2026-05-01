@@ -21,7 +21,7 @@ Returned values
 
 Features
     * Yaw-aligned body-frame PID with leaky integral and optional DOB.
-    * Millisecond timestamp for scheduling/logging; control core uses fixed dt.
+    * Millisecond timestamp -> internal dt conversion (real flight friendly).
     * Optional multi-waypoint scheduling (set_waypoints / auto-advance on arrival).
     * CSV telemetry log (disable with enable_logging(False) if not wanted).
 
@@ -55,200 +55,63 @@ def rot_world_to_yaw_body(yaw):
 
 
 # ============================================================
-# Model-aware DOB on XY + controller.py's Z/yaw verbatim.
-# Ported from the current `controller.py` into this combined lab wrapper.
+# Outer-loop: yaw-aligned body-frame PID -> velocity setpoint + optional DOB
+# (identical tuning/logic as controller.py's DOBController)
 # ============================================================
-
-
-def smoothstep(x, edge0, edge1):
-    """Hermite smoothstep; 在 [edge0, edge1] 区间从 0 平滑过渡到 1."""
-    if edge1 <= edge0 + 1e-9:
-        return 0.0 if x < edge0 else 1.0
-    t = np.clip((x - edge0) / (edge1 - edge0), 0.0, 1.0)
-    return float(t * t * (3.0 - 2.0 * t))
-
-
-def soft_deadzone(x, eps):
-    """连续型软死区: |x|<=eps 近似为 0，|x|>>eps 近似为 x 本身；全程 C1 光滑。"""
-    if eps <= 1e-9:
-        return x
-    return x * (1.0 - np.exp(-(x / eps) ** 2))
-
-
-# ---------- 内环辨识参数 (写死，来源：inner_loop_id_output/inner_loop_params.json) ----------
-INNER = {
-    "xy": {
-        "K": 0.9791332892264056,
-        "wn": 1.1688119784531361,
-        "zeta": 0.42594658984568196,
-        "tau_z": 0.2052931630745509,
-        "L": 0.1153442442895058,
-    },
-    "z": {
-        "K": 0.9564045415827129,
-        "tau": 0.1659312509862405,
-        "L": 0.05598021989635007,
-    },
-}
-
-
-class _SecondOrderZeroDelay:
-    """G(s) = K * wn^2 * (tau_z s + 1) / (s^2 + 2 zeta wn s + wn^2) * e^{-L s}"""
-
-    def __init__(self, K, wn, zeta, tau_z, delay_s, hist_len=24):
-        self.K = float(K)
-        self.wn = float(wn)
-        self.zeta = float(zeta)
-        self.tau_z = float(tau_z)
-        self.delay_s = max(0.0, float(delay_s))
-        self.x1 = 0.0
-        self.x2 = 0.0
-        self._hist = [0.0] * int(max(2, hist_len))
-        self._hist_len = len(self._hist)
-        self._hist_write_idx = 0
-
-    def reset(self):
-        self.x1 = 0.0
-        self.x2 = 0.0
-        for i in range(self._hist_len):
-            self._hist[i] = 0.0
-        self._hist_write_idx = 0
-
-    def _delayed(self, u, dt):
-        # Ring buffer write
-        self._hist[self._hist_write_idx] = float(u)
-        self._hist_write_idx = (self._hist_write_idx + 1) % self._hist_len
-
-        d = self.delay_s / max(dt, 1e-6)
-        n0 = int(np.floor(d))
-        frac = d - n0
-
-        # Newest sample is at write_idx - 1
-        newest_idx = (self._hist_write_idx - 1) % self._hist_len
-        idx_newer = (newest_idx - n0) % self._hist_len
-        idx_older = (idx_newer - 1) % self._hist_len
-        return (1.0 - frac) * self._hist[idx_newer] + frac * self._hist[idx_older]
-
-    def step(self, u, dt):
-        dt = max(dt, 1e-6)
-        u_d = self._delayed(u, dt)
-        substeps = max(1, int(np.ceil(dt / 0.01)))
-        h = dt / substeps
-        wn2 = self.wn * self.wn
-        two_zeta_wn = 2.0 * self.zeta * self.wn
-        for _ in range(substeps):
-            x1_dot = self.x2
-            x2_dot = -wn2 * self.x1 - two_zeta_wn * self.x2 + wn2 * u_d
-            self.x1 += h * x1_dot
-            self.x2 += h * x2_dot
-        return self.K * (self.x1 + self.tau_z * self.x2)
-
-
-class _SecondOrderLowpass:
-    """H(s) = wq^2 / (s^2 + 2 zeta_q wq s + wq^2)"""
-
-    def __init__(self, wq, zeta_q=0.95):
-        self.wq = max(1e-3, float(wq))
-        self.zeta_q = float(zeta_q)
-        self.x1 = 0.0
-        self.x2 = 0.0
-
-    def reset(self):
-        self.x1 = 0.0
-        self.x2 = 0.0
-
-    def step(self, u, dt):
-        dt = max(dt, 1e-6)
-        substeps = max(1, int(np.ceil(dt / 0.02)))
-        h = dt / substeps
-        w2 = self.wq * self.wq
-        twozw = 2.0 * self.zeta_q * self.wq
-        for _ in range(substeps):
-            x1_dot = self.x2
-            x2_dot = -w2 * self.x1 - twozw * self.x2 + w2 * float(u)
-            self.x1 += h * x1_dot
-            self.x2 += h * x2_dot
-        return self.x1
-
-
-class ModelDOBxyController:
+class DOBController:
     def __init__(self):
-        kp_xy = 0.38
-        ki_xy = 0.040
-        kd_xy = 0.30
-        ki_sat_xy = 0.40
-
-        kp_z = 1.18
-        ki_z = 0.60
-        kd_z = 0.96
-        ki_sat_z = 0.58
-
-        self.kp_pos = np.array([kp_xy, kp_xy, kp_z], dtype=float)
-        self.ki_pos = np.array([ki_xy, ki_xy, ki_z], dtype=float)
-        self.kd_vel = np.array([kd_xy, kd_xy, kd_z], dtype=float)
-        self.ki_pos_sat = np.array([ki_sat_xy, ki_sat_xy, ki_sat_z], dtype=float)
+        kp_xy, kp_z = 0.672, 1.18
+        ki_xy, ki_z = 0.095, 0.6
+        kd_xy, kd_z = 0.504, 0.96
+        ki_sat_xy, ki_sat_z = 0.60, 0.58
+        self.kp_pos = np.array([kp_xy, kp_xy, kp_z])
+        self.ki_pos = np.array([ki_xy, ki_xy, ki_z])
+        self.kd_vel = np.array([kd_xy, kd_xy, kd_z])
+        self.ki_pos_sat = np.array([ki_sat_xy, ki_sat_xy, ki_sat_z])
 
         self.kp_yaw = 2.05
         self.ki_yaw = 0.42
         self.kd_yaw = 0.16
         self.ki_yaw_sat = 0.18
+
+        self.k_dob = np.array([0.10, 0.10, 0.00])
+        self.dob_leak = np.array([0.55, 0.55, 0.40])
+        self.k_comp = np.array([0.16, 0.16, 0.00])
+
+        # Position integral exponential decay lambda [1/s]: larger -> faster fade.
+        self.int_pos_leak = np.array([2.5, 2.5, 1.5])
         self.int_yaw_leak = 2.0
+
+        self.max_vel = np.array([0.68, 0.68, 0.68])
         self.max_yaw_rate = 1.74533
+        # Yaw alignment threshold for diagnostics / optional gating.
         self.yaw_align_tol = 0.167
+        # If True: "turn-then-move" behavior (block vx/vy until yaw aligned).
+        # If False: move immediately while yaw controller still tracks yaw_d.
+        self.gate_xy_on_yaw = False
 
-        self.int_pos_leak = np.array([1.8, 1.8, 1.5], dtype=float)
-
-        self.max_vel = np.array([0.78, 0.78, 0.78], dtype=float)
-        self.max_xy_speed = 0.78
-
-        self.vel_est_world = np.zeros(3, dtype=float)
+        self.prev_yaw = None
+        self.prev_yaw_err = None
+        self.int_pos_body = np.zeros(3)
+        self.int_yaw = 0.0
+        self.vel_est_world = np.zeros(3)
         self.prev_pos_error_world = None
         self.vel_est_lpf_alpha = 0.56
 
-        mx = INNER["xy"]
-        self.model_x = _SecondOrderZeroDelay(mx["K"], mx["wn"], mx["zeta"], mx["tau_z"], mx["L"])
-        self.model_y = _SecondOrderZeroDelay(mx["K"], mx["wn"], mx["zeta"], mx["tau_z"], mx["L"])
-        self.model_vel_xy = np.zeros(2, dtype=float)
-
-        self.q_filter_x = _SecondOrderLowpass(wq=0.80, zeta_q=0.95)
-        self.q_filter_y = _SecondOrderLowpass(wq=0.80, zeta_q=0.95)
-        self.d_hat_xy = np.zeros(2, dtype=float)
-        self.d_hat_max = 0.40
-        self.k_comp_xy = 0.80
-
-        self.cmd_xy_lpf_beta = 0.70
-        self.prev_xy_cmd = np.zeros(2, dtype=float)
-
-        # DOB 仅在接近目标时启用：水平距离 <= 0.01 m
-        self.dob_enable_radius_m = 0.010
-        # 未启用 DOB 时，对估计扰动做指数衰减，避免残留补偿影响
-        self.dob_decay_rate = 6.0  # [1/s]
-        self.d_term_zero_edge = 0.010
-        self.d_term_full_edge = 0.045
-        self.xy_pos_err_soft_eps = 0.004
-
-        self.p_boost_full_edge = 0.002
-        self.p_boost_zero_edge = 0.020
-        self.p_boost_gain = 0.60
-
-        self.int_pos_body = np.zeros(3, dtype=float)
-        self.int_yaw = 0.0
-        self.prev_yaw_err = None
+        self.d_hat = np.zeros(3)
         self.last_debug = {}
 
+        # Tuning mode: XY uses P-term only (disable XY I/D/DOB).
+        self.xy_p_only = False
+
     def reset(self):
-        self.vel_est_world[:] = 0.0
-        self.prev_pos_error_world = None
-        self.int_pos_body[:] = 0.0
-        self.int_yaw = 0.0
+        self.prev_yaw = None
         self.prev_yaw_err = None
-        self.prev_xy_cmd[:] = 0.0
-        self.d_hat_xy[:] = 0.0
-        self.model_vel_xy[:] = 0.0
-        self.model_x.reset()
-        self.model_y.reset()
-        self.q_filter_x.reset()
-        self.q_filter_y.reset()
+        self.int_pos_body = np.zeros(3)
+        self.int_yaw = 0.0
+        self.vel_est_world = np.zeros(3)
+        self.prev_pos_error_world = None
+        self.d_hat = np.zeros(3)
         self.last_debug = {}
 
     def _update_vel_est_from_pos_error(self, pos_err_world, dt):
@@ -260,32 +123,26 @@ class ModelDOBxyController:
             self.vel_est_world = a * raw_vel + (1.0 - a) * self.vel_est_world
         self.prev_pos_error_world = pos_err_world.copy()
 
-    def _update_xy_dob(self, vel_cmd_nom_xy, vel_est_xy, dt, wind_enabled):
-        self.model_vel_xy[0] = self.model_x.step(vel_cmd_nom_xy[0], dt)
-        self.model_vel_xy[1] = self.model_y.step(vel_cmd_nom_xy[1], dt)
-
-        mismatch = vel_est_xy - self.model_vel_xy
-        mismatch = np.clip(mismatch, -1.0, 1.0)
-
-        enable_scale = 1.0 if wind_enabled else 0.15
-        u_x = enable_scale * mismatch[0]
-        u_y = enable_scale * mismatch[1]
-
-        self.d_hat_xy[0] = float(np.clip(self.q_filter_x.step(u_x, dt), -self.d_hat_max, self.d_hat_max))
-        self.d_hat_xy[1] = float(np.clip(self.q_filter_y.step(u_y, dt), -self.d_hat_max, self.d_hat_max))
+    def update_dob(self, vel_cmd_body, vel_est_body, dt, wind_enabled):
+        if dt <= 1e-6:
+            return
+        vel_tracking_error = vel_cmd_body - vel_est_body
+        scale = 1.0 if wind_enabled else 0.5
+        d_dot = scale * self.k_dob * vel_tracking_error - self.dob_leak * self.d_hat
+        self.d_hat += d_dot * dt
+        self.d_hat = np.clip(self.d_hat, -0.55, 0.55)
 
     def compute(self, state, target_pos, dt, wind_enabled=False):
         state = np.asarray(state, dtype=float).reshape(-1)
         if state.size < 6:
             return (0.0, 0.0, 0.0, 0.0)
-
         x, y, z, roll, pitch, yaw = state[0:6]
         x_d, y_d, z_d, yaw_d = target_pos
 
         pos = np.array([x, y, z], dtype=float)
         pos_d = np.array([x_d, y_d, z_d], dtype=float)
-        pos_err_world = pos_d - pos
 
+        pos_err_world = pos_d - pos
         self._update_vel_est_from_pos_error(pos_err_world, dt)
         vel_est_world = self.vel_est_world.copy()
 
@@ -295,67 +152,50 @@ class ModelDOBxyController:
 
         yaw_err = wrap_to_pi(yaw_d - yaw)
         yaw_aligned = abs(yaw_err) < self.yaw_align_tol
+        allow_xy = (not self.gate_xy_on_yaw) or yaw_aligned
 
+        # z always integrates; horizontal integrates only after yaw alignment.
         self.int_pos_body[2] += pos_err_body[2] * dt
-        yaw_i_scale = 1.0 - smoothstep(abs(yaw_err), self.yaw_align_tol, 3.0 * self.yaw_align_tol)
-        self.int_pos_body[0] += yaw_i_scale * pos_err_body[0] * dt
-        self.int_pos_body[1] += yaw_i_scale * pos_err_body[1] * dt
+        if allow_xy and (not self.xy_p_only):
+            self.int_pos_body[0] += pos_err_body[0] * dt
+            self.int_pos_body[1] += pos_err_body[1] * dt
         self.int_pos_body *= np.exp(-self.int_pos_leak * dt)
-        self.int_pos_body = np.clip(self.int_pos_body, -self.ki_pos_sat, self.ki_pos_sat)
+        self.int_pos_body = np.clip(
+            self.int_pos_body, -self.ki_pos_sat, self.ki_pos_sat
+        )
 
-        pos_err_body_for_pid = pos_err_body.copy()
-        pos_err_body_for_pid[0] = soft_deadzone(pos_err_body_for_pid[0], self.xy_pos_err_soft_eps)
-        pos_err_body_for_pid[1] = soft_deadzone(pos_err_body_for_pid[1], self.xy_pos_err_soft_eps)
-
-        p_term = self.kp_pos * pos_err_body_for_pid
+        p_term = self.kp_pos * pos_err_body
         i_term = self.ki_pos * self.int_pos_body
-        d_term_full = -self.kd_vel * vel_est_body
+        d_term = -self.kd_vel * vel_est_body
 
-        xy_err_norm = float(np.linalg.norm(pos_err_body[0:2]))
-
-        near_factor = 1.0 - smoothstep(xy_err_norm, self.p_boost_full_edge, self.p_boost_zero_edge)
-        p_boost = 1.0 + self.p_boost_gain * near_factor
-        p_term[0] *= p_boost
-        p_term[1] *= p_boost
-
-        d_fade_xy = smoothstep(xy_err_norm, self.d_term_zero_edge, self.d_term_full_edge)
-        d_term = d_term_full.copy()
-        d_term[0] *= d_fade_xy
-        d_term[1] *= d_fade_xy
+        if self.xy_p_only:
+            self.int_pos_body[0:2] = 0.0
+            i_term[0:2] = 0.0
+            d_term[0:2] = 0.0
 
         vel_cmd_nominal = p_term + i_term + d_term
 
-        dob_enabled = (xy_err_norm <= self.dob_enable_radius_m)
-        if dob_enabled:
-            self._update_xy_dob(
-                vel_cmd_nominal[0:2],
-                vel_est_body[0:2],
-                dt,
-                wind_enabled,
-            )
+        dob_comp = np.zeros(3)
+        if wind_enabled and (not self.xy_p_only):
+            xy_err = np.linalg.norm(pos_err_body[0:2])
+            if xy_err <= 0.25:
+                self.update_dob(vel_cmd_nominal, vel_est_body, dt, wind_enabled)
+            else:
+                self.d_hat *= np.exp(-self.dob_leak * dt)
+            dob_comp = self.k_comp * self.d_hat
+            vel_cmd = vel_cmd_nominal + dob_comp
         else:
-            self.d_hat_xy *= float(np.exp(-self.dob_decay_rate * max(dt, 1e-6)))
-
-        dob_comp_xy = (self.k_comp_xy * self.d_hat_xy) if dob_enabled else np.zeros(2, dtype=float)
-        dob_comp = np.array([dob_comp_xy[0], dob_comp_xy[1], 0.0], dtype=float)
-
-        vel_cmd = vel_cmd_nominal + dob_comp
-
-        xy_cmd = vel_cmd[0:2].copy()
-        xy_cmd = self.cmd_xy_lpf_beta * self.prev_xy_cmd + (1.0 - self.cmd_xy_lpf_beta) * xy_cmd
-        self.prev_xy_cmd = xy_cmd.copy()
-        vel_cmd[0] = xy_cmd[0]
-        vel_cmd[1] = xy_cmd[1]
+            self.d_hat[:] = 0.0
+            vel_cmd = vel_cmd_nominal.copy()
 
         vel_cmd = np.clip(vel_cmd, -self.max_vel, self.max_vel)
-        xy_speed = float(np.linalg.norm(vel_cmd[0:2]))
-        if xy_speed > self.max_xy_speed and xy_speed > 1e-9:
-            vel_cmd[0:2] *= self.max_xy_speed / xy_speed
+        if (not allow_xy):
+            vel_cmd[0] = 0.0
+            vel_cmd[1] = 0.0
 
         self.int_yaw += yaw_err * dt
         self.int_yaw *= float(np.exp(-self.int_yaw_leak * dt))
         self.int_yaw = float(np.clip(self.int_yaw, -self.ki_yaw_sat, self.ki_yaw_sat))
-
         if self.prev_yaw_err is None or dt <= 1e-6:
             yaw_err_deriv = 0.0
         else:
@@ -376,6 +216,8 @@ class ModelDOBxyController:
         if abs(yaw_rate_cmd) >= self.max_yaw_rate - 1e-6:
             self.int_yaw -= yaw_err * dt
 
+        self.prev_yaw = yaw
+
         self.last_debug = {
             "pos": pos.copy(),
             "target": pos_d.copy(),
@@ -383,16 +225,12 @@ class ModelDOBxyController:
             "pos_err_body": pos_err_body.copy(),
             "vel_est_world": vel_est_world.copy(),
             "vel_est_body": vel_est_body.copy(),
-            "vel_model_body": np.array([self.model_vel_xy[0], self.model_vel_xy[1], 0.0], dtype=float),
             "vel_cmd_nominal": vel_cmd_nominal.copy(),
             "pid_p_body": p_term.copy(),
             "pid_i_body": i_term.copy(),
             "pid_d_body": d_term.copy(),
-            "d_hat": np.array([self.d_hat_xy[0], self.d_hat_xy[1], 0.0], dtype=float),
+            "d_hat": self.d_hat.copy(),
             "dob_comp_body": dob_comp.copy(),
-            "dob_enabled": bool(dob_enabled),
-            "d_term_fade": d_fade_xy,
-            "p_boost": p_boost,
             "vel_cmd_final": vel_cmd.copy(),
             "yaw_err": yaw_err,
             "yaw_aligned": yaw_aligned,
@@ -450,14 +288,14 @@ class TelemetryLogger:
 
 
 # ============================================================
-# Practical wrapper: millisecond timestamp, waypoint scheduling, CSV log
-# (from controller_practical.py, now using the inlined ModelDOBxyController)
+# Practical wrapper: millisecond timestamp -> dt, waypoint scheduling, CSV log
+# (from controller_practical.py, now using the inlined DOBController)
 # ============================================================
 class PracticalController:
     HARD_CLAMP = 100.0
 
     def __init__(self):
-        self._ctrl = ModelDOBxyController()
+        self._dob = DOBController()
         # Real flights: no simulated wind -> DOB path off by default.
         self._wind_enabled = False
 
@@ -509,7 +347,7 @@ class PracticalController:
         self._wp_hold_start_ms = None
 
     def reset(self):
-        self._ctrl.reset()
+        self._dob.reset()
         self._prev_ts_ms = None
         self._start_ts_ms = None
         self._wp_idx = 0
@@ -561,8 +399,7 @@ class PracticalController:
 
         active_target = self._pick_target(pos, yaw, target_pos, ts_ms)
 
-        # Use real dt from the incoming millisecond timestamp.
-        vx, vy, vz, yaw_rate = self._ctrl.compute(
+        vx, vy, vz, yaw_rate = self._dob.compute(
             state_arr, active_target, dt, wind_enabled=self._wind_enabled
         )
 
@@ -578,7 +415,7 @@ class PracticalController:
         return (vx, vy, vz, yaw_rate)
 
     def _log_row(self, ts_ms, dt, state_arr, active_target, cmd):
-        d = self._ctrl.last_debug or {}
+        d = self._dob.last_debug or {}
         pos_err_w = d.get("pos_err_world", np.zeros(3))
         vel_w = d.get("vel_est_world", np.zeros(3))
         vel_b = d.get("vel_est_body", np.zeros(3))
@@ -648,26 +485,24 @@ def reset_controller():
 
 
 def get_debug():
-    """Return the most recent debug dict from the underlying ModelDOBxyController."""
-    return dict(_practical._ctrl.last_debug)
+    """Return the most recent debug dict from the underlying DOBController."""
+    return dict(_practical._dob.last_debug)
 
 
 # ---------- Integral telemetry (kept for compatibility with controller.py API) ----------
 def get_integral_telemetry():
     """Integral contributions from the last controller() call (for plotting)."""
-    d = _practical._ctrl.last_debug
+    d = _practical._dob.last_debug
     if not d:
         return {
             "pid_i_body": (0.0, 0.0, 0.0),
             "yaw_i_term": 0.0,
             "dob_comp_body": (0.0, 0.0, 0.0),
             "vel_est_body": (0.0, 0.0, 0.0),
-            "vel_model_body": (0.0, 0.0, 0.0),
         }
     pi = np.asarray(d["pid_i_body"], dtype=float).ravel()
     dob_comp = np.asarray(d.get("dob_comp_body", (0.0, 0.0, 0.0)), dtype=float).ravel()
     vel_est = np.asarray(d.get("vel_est_body", (0.0, 0.0, 0.0)), dtype=float).ravel()
-    vel_model = np.asarray(d.get("vel_model_body", (0.0, 0.0, 0.0)), dtype=float).ravel()
     return {
         "pid_i_body": (float(pi[0]), float(pi[1]), float(pi[2])),
         "yaw_i_term": float(d["yaw_i_term"]),
@@ -680,10 +515,5 @@ def get_integral_telemetry():
             float(vel_est[0]),
             float(vel_est[1]),
             float(vel_est[2]),
-        ),
-        "vel_model_body": (
-            float(vel_model[0]),
-            float(vel_model[1]),
-            float(vel_model[2]),
         ),
     }
