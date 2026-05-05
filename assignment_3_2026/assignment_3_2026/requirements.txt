@@ -1,0 +1,6 @@
+numpy
+matplotlib
+pybullet
+
+# Optional (only needed for live telemetry plot window in run_test.py)
+PySide6
